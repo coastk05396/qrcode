@@ -40,3 +40,16 @@ class ScanEvent(Base):
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
 
     __table_args__ = (Index("idx_token_scanned", "token", "scanned_at"),)
+
+
+# Stores short-lived create attempts so rate limiting can work across instances.
+class CreateAttempt(Base):
+    __tablename__ = "create_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(LOCAL_TZ), index=True
+    )
+
+    __table_args__ = (Index("idx_client_created", "client_key", "created_at"),)

@@ -1,16 +1,15 @@
 import io
-from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from typing import TypedDict
 
 import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models import LOCAL_TZ, ScanEvent, UrlMapping
+from .models import CreateAttempt, LOCAL_TZ, ScanEvent, UrlMapping
 from .schemas import CreateRequest, CreateResponse, QRInfoResponse, UpdateRequest
 from .token_gen import generate_token
 from .url_validator import validate_url
@@ -29,7 +28,6 @@ redirect_cache: dict[str, _CacheEntry] = {}
 BASE_URL = "http://localhost:8000"
 CREATE_RATE_LIMIT_COUNT = 3
 CREATE_RATE_LIMIT_WINDOW = timedelta(minutes=1)
-create_rate_limit: defaultdict[str, deque[datetime]] = defaultdict(deque)
 
 
 def _local_datetime(value: datetime | None) -> datetime | None:
@@ -45,28 +43,57 @@ def _is_expired(value: datetime | None) -> bool:
     return expires_at is not None and expires_at <= datetime.now(LOCAL_TZ)
 
 
-def _check_create_rate_limit(request: Request):
+def _client_key(request: Request) -> str:
+    forwarded = (
+        request.headers.get("x-vercel-forwarded-for")
+        or request.headers.get("x-forwarded-for")
+        or request.headers.get("x-real-ip")
+    )
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_create_rate_limit(request: Request, db: Session):
     now = datetime.now(LOCAL_TZ)
-    client_key = request.client.host if request.client else "unknown"
-    attempts = create_rate_limit[client_key]
+    cutoff = now - CREATE_RATE_LIMIT_WINDOW
+    client_key = _client_key(request)
 
-    while attempts and now - attempts[0] >= CREATE_RATE_LIMIT_WINDOW:
-        attempts.popleft()
+    # Keep the backing table bounded to the active rate-limit window.
+    db.execute(delete(CreateAttempt).where(CreateAttempt.created_at < cutoff))
+    db.commit()
 
-    if len(attempts) >= CREATE_RATE_LIMIT_COUNT:
-        retry_after = int((attempts[0] + CREATE_RATE_LIMIT_WINDOW - now).total_seconds()) + 1
+    attempt_count = int(
+        db.query(func.count(CreateAttempt.id))
+        .filter(CreateAttempt.client_key == client_key, CreateAttempt.created_at >= cutoff)
+        .scalar()
+        or 0
+    )
+
+    if attempt_count >= CREATE_RATE_LIMIT_COUNT:
+        oldest_attempt = (
+            db.query(CreateAttempt.created_at)
+            .filter(CreateAttempt.client_key == client_key, CreateAttempt.created_at >= cutoff)
+            .order_by(CreateAttempt.created_at.asc())
+            .first()
+        )
+        oldest_attempt_at = _local_datetime(oldest_attempt[0]) if oldest_attempt else now
+        retry_after = int(
+            (oldest_attempt_at + CREATE_RATE_LIMIT_WINDOW - now).total_seconds()
+        ) + 1
         raise HTTPException(
             status_code=429,
             detail="Too many QR codes created. Try again later.",
             headers={"Retry-After": str(max(retry_after, 1))},
         )
 
-    attempts.append(now)
+    db.add(CreateAttempt(client_key=client_key, created_at=now))
+    db.commit()
 
 
 @router.post("/api/qr/create", response_model=CreateResponse)
 def create_qr(req: CreateRequest, request: Request, db: Session = Depends(get_db)):
-    _check_create_rate_limit(request)
+    _check_create_rate_limit(request, db)
 
     # Validate and normalize before we generate a token or persist anything.
     try:                                                                                                                                                           
