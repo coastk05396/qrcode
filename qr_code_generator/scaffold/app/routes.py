@@ -1,5 +1,6 @@
 import io
 from datetime import datetime
+from typing import TypedDict
 
 import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,20 +16,28 @@ from .url_validator import validate_url
 
 router = APIRouter()
 
+
+class _CacheEntry(TypedDict):
+    url: str
+    expires_at: datetime | None
+
+
 # In-memory cache (simulates Redis for prototype)
-redirect_cache: dict[str, str] = {}
+redirect_cache: dict[str, _CacheEntry] = {}
 
 BASE_URL = "http://localhost:8000"
 
 
 @router.post("/api/qr/create", response_model=CreateResponse)
 def create_qr(req: CreateRequest, db: Session = Depends(get_db)):
+    # Validate and normalize before we generate a token or persist anything.
     try:                                                                                                                                                           
         normalized_url = validate_url(req.url)                
     except ValueError as e:                                                                                                                                        
         raise HTTPException(status_code=422, detail=str(e))
     token = generate_token(normalized_url, db)
 
+    # Persist the mapping so future redirects resolve through the short token.
     mapping = UrlMapping(
         token=token,
         original_url=normalized_url,
@@ -39,8 +48,8 @@ def create_qr(req: CreateRequest, db: Session = Depends(get_db)):
 
     short_url = f"{BASE_URL}/r/{token}"
 
-    # Warm cache
-    redirect_cache[token] = normalized_url
+    # Warm cache with metadata so cache hits never need a DB round-trip.
+    redirect_cache[token] = {"url": normalized_url, "expires_at": req.expires_at}
 
     return CreateResponse(
         token=token,
@@ -53,22 +62,37 @@ def create_qr(req: CreateRequest, db: Session = Depends(get_db)):
 @router.get("/r/{token}")
 def redirect(token: str, request: Request, db: Session = Depends(get_db)):
     """Redirect fallback flow: Cache -> DB -> 404/410 (from slides mermaid diagram)"""
-    # TODO: Implement this function
-    #
-    # Design decision: the redirect path is the hottest path in the system, so
-    # we use a cache-first strategy (Cache -> DB -> 404/410) to minimize DB load
-    # while still handling soft-deleted and expired links.
-    #
-    # Hints:
-    # 1. Check redirect_cache first — on hit, call _record_scan() and return
-    #    RedirectResponse(status_code=302).
-    # 2. On miss, query the DB: raise 404 if not found, 410 if is_deleted or
-    #    past expires_at; otherwise warm the cache, _record_scan(), and 302.
-    raise NotImplementedError("redirect() is not yet implemented")
+    # Scaffold TODO reference:
+    # 1. Check redirect_cache first because this is the hottest path in the system.
+    # 2. Fall back to the DB on cache miss so deletes and expirations still work.
+    # 3. Return 404 for unknown tokens, 410 for deleted/expired tokens, and 302 otherwise.
+    cached = redirect_cache.get(token)
+    if cached is not None:
+        # Serve entirely from cached metadata — no DB round-trip needed.
+        # Deletions are handled by cache invalidation in delete_qr/update_qr.
+        if cached["expires_at"] is not None and cached["expires_at"] <= datetime.utcnow():
+            redirect_cache.pop(token, None)
+            raise HTTPException(status_code=410, detail="Gone")
+        _record_scan(token, request, db)
+        return RedirectResponse(url=cached["url"], status_code=302)
+
+    mapping = db.query(UrlMapping).filter(UrlMapping.token == token).first()
+    if mapping is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    if mapping.is_deleted or (
+        mapping.expires_at is not None and mapping.expires_at <= datetime.utcnow()
+    ):
+        raise HTTPException(status_code=410, detail="Gone")
+
+    # Warm the cache after a DB hit so the next redirect avoids another lookup.
+    redirect_cache[token] = {"url": mapping.original_url, "expires_at": mapping.expires_at}
+    _record_scan(token, request, db)
+    return RedirectResponse(url=mapping.original_url, status_code=302)
 
 
 @router.get("/api/qr/{token}", response_model=QRInfoResponse)
 def get_qr_info(token: str, db: Session = Depends(get_db)):
+    # Read-only metadata lookup for the management API.
     mapping = _get_mapping_or_404(token, db)
     return mapping
 
@@ -78,6 +102,7 @@ def update_qr(token: str, req: UpdateRequest, db: Session = Depends(get_db)):
     mapping = _get_mapping_or_404(token, db)
 
     if req.url is not None:
+        # Re-run the same validation rules used during creation.
         try:
             mapping.original_url = validate_url(req.url)
         except ValueError as e:
@@ -98,6 +123,7 @@ def update_qr(token: str, req: UpdateRequest, db: Session = Depends(get_db)):
 @router.delete("/api/qr/{token}")
 def delete_qr(token: str, db: Session = Depends(get_db)):
     mapping = _get_mapping_or_404(token, db)
+    # Soft delete keeps history in the DB while making future redirects return 410.
     mapping.is_deleted = True
     db.commit()
     # Invalidate cache
@@ -107,6 +133,7 @@ def delete_qr(token: str, db: Session = Depends(get_db)):
 
 @router.get("/api/qr/{token}/image")
 def get_qr_image(token: str, db: Session = Depends(get_db)):
+    # The QR code encodes the short redirect URL, not the original long URL.
     _get_mapping_or_404(token, db)
     short_url = f"{BASE_URL}/r/{token}"
 
@@ -119,6 +146,7 @@ def get_qr_image(token: str, db: Session = Depends(get_db)):
 
 @router.get("/api/qr/{token}/analytics")
 def get_analytics(token: str, db: Session = Depends(get_db)):
+    # Aggregate scan count plus a simple daily rollup from scan_events.
     _get_mapping_or_404(token, db)
 
     total = db.query(func.count(ScanEvent.id)).filter(ScanEvent.token == token).scalar()
@@ -141,6 +169,7 @@ def get_analytics(token: str, db: Session = Depends(get_db)):
 
 
 def _get_mapping_or_404(token: str, db: Session) -> UrlMapping:
+    # Shared lookup helper for routes that operate on an existing live token.
     mapping = db.query(UrlMapping).filter(UrlMapping.token == token).first()
     if mapping is None or mapping.is_deleted:
         raise HTTPException(status_code=404, detail="Not Found")
@@ -148,6 +177,7 @@ def _get_mapping_or_404(token: str, db: Session) -> UrlMapping:
 
 
 def _record_scan(token: str, request: Request, db: Session):
+    # Each redirect writes one analytics event with the minimal request metadata we need.
     event = ScanEvent(
         token=token,
         user_agent=request.headers.get("user-agent"),

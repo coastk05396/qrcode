@@ -24,19 +24,22 @@ def base62_encode(data: bytes) -> str:
 
 
 def token_exists_in_db(db: Session, token: str) -> bool:
+    # The DB is the source of truth for collision checks.
     return db.query(UrlMapping).filter(UrlMapping.token == token).first() is not None
 
 
 def generate_token(url: str, db: Session) -> str:
     """SHA-256 + nonce + Base62 token generation with collision retry."""
-    # TODO: Implement this function
-    #
-    # Design decision: hash-based tokens give us short, deterministic-ish IDs,
-    # but we must handle collisions as the table grows.
-    #
-    # Hints:
-    # 1. Loop up to MAX_RETRIES. Each attempt: hash (url + a varying nonce)
-    #    with SHA-256, pass the digest to base62_encode(), truncate to TOKEN_LENGTH.
-    # 2. Use token_exists_in_db() to check for collisions — return on the first
-    #    free token, raise RuntimeError if all retries are exhausted.
-    raise NotImplementedError("generate_token() is not yet implemented")
+    # Scaffold TODO reference:
+    # 1. Hash (url + a varying nonce) so repeated requests can still produce fresh tokens.
+    # 2. Base62-encode the digest and truncate it to TOKEN_LENGTH for a short URL-safe token.
+    # 3. Ask the database whether that token already exists before returning it.
+    for attempt in range(MAX_RETRIES):
+        nonce = f"{time.time_ns()}:{attempt}"
+        digest = hashlib.sha256(f"{url}:{nonce}".encode("utf-8")).digest()
+        token = base62_encode(digest)[:TOKEN_LENGTH]
+        if not token_exists_in_db(db, token):
+            return token
+
+    # If every retry collides, surface the failure instead of silently reusing a token.
+    raise RuntimeError("Unable to generate a unique token")

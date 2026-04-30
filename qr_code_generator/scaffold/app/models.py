@@ -6,6 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
 
+# Stores the editable short-link metadata behind each QR code.
 class UrlMapping(Base):
     __tablename__ = "url_mappings"
 
@@ -20,6 +21,7 @@ class UrlMapping(Base):
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+# Stores every redirect hit so the API can return simple analytics later.
 class ScanEvent(Base):
     __tablename__ = "scan_events"
 
