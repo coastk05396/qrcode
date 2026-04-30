@@ -20,11 +20,20 @@
 
 **Prerequisite:** Python 3.10 or higher
 
+For the frontend targets and `make setup-frontend`, you also need Node.js 20+ with `npm`.
+
 ```bash
 cd scaffold
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+If you want one-command shortcuts from the repo root, use `make`:
+
+```bash
+make setup
+make dev
 ```
 
 ### Files to Fill In
@@ -39,6 +48,13 @@ pip install -r requirements.txt
 
 ```bash
 uvicorn app.main:app --reload
+```
+
+Or from the repo root:
+
+```bash
+make backend
+make frontend
 ```
 
 Then run the verification tests from `PROMPT.md`.
