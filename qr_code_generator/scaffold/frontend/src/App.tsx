@@ -50,6 +50,11 @@ function formatHostname(value: string) {
   }
 }
 
+function parseExpiry(value: string) {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 function App() {
   const [url, setUrl] = useState("");
   const [useExpiry, setUseExpiry] = useState(false);
@@ -77,6 +82,12 @@ function App() {
       return;
     }
 
+    const expiresAtIso = useExpiry && expiresAt ? parseExpiry(expiresAt) : null;
+    if (useExpiry && expiresAt && !expiresAtIso) {
+      setFieldError("Enter a valid expiration date and time.");
+      return;
+    }
+
     setIsGenerating(true);
 
     try {
@@ -85,7 +96,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           url: normalizedInput,
-          expires_at: useExpiry && expiresAt ? new Date(expiresAt).toISOString() : null
+          expires_at: expiresAtIso
         })
       });
 
@@ -119,8 +130,16 @@ function App() {
       return;
     }
 
-    await navigator.clipboard.writeText(result.short_url);
-    setToast({ tone: "success", message: "Short link copied." });
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+
+      await navigator.clipboard.writeText(result.short_url);
+      setToast({ tone: "success", message: "Short link copied." });
+    } catch {
+      setToast({ tone: "error", message: "Unable to copy short link." });
+    }
   }
 
   async function downloadQr() {
@@ -128,15 +147,38 @@ function App() {
       return;
     }
 
-    const response = await fetch(localProxyUrl(result.qr_code_url));
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = objectUrl;
-    link.download = `qr-${result.token}.png`;
-    link.click();
-    URL.revokeObjectURL(objectUrl);
-    setToast({ tone: "success", message: "QR image downloaded." });
+    try {
+      const response = await fetch(localProxyUrl(result.qr_code_url));
+
+      if (!response.ok) {
+        let detail = "Could not download this QR image.";
+        try {
+          const body = (await response.json()) as ApiError;
+          detail = body.detail || detail;
+        } catch {
+          // Keep the default message for non-JSON failures.
+        }
+        throw new Error(detail);
+      }
+
+      const contentType = response.headers.get("Content-Type") || "";
+      if (!contentType.includes("image/png")) {
+        throw new Error("The QR image response was not a PNG file.");
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `qr-${result.token}.png`;
+      link.click();
+      URL.revokeObjectURL(objectUrl);
+      setToast({ tone: "success", message: "QR image downloaded." });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not download this QR image.";
+      setToast({ tone: "error", message });
+    }
   }
 
   function reset() {
@@ -287,4 +329,3 @@ function App() {
 }
 
 export default App;
-
