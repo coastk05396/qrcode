@@ -9,7 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .models import ScanEvent, UrlMapping
+from .models import LOCAL_TZ, ScanEvent, UrlMapping
 from .schemas import CreateRequest, CreateResponse, QRInfoResponse, UpdateRequest
 from .token_gen import generate_token
 from .url_validator import validate_url
@@ -28,6 +28,19 @@ redirect_cache: dict[str, _CacheEntry] = {}
 BASE_URL = "http://localhost:8000"
 
 
+def _local_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=LOCAL_TZ)
+    return value.astimezone(LOCAL_TZ)
+
+
+def _is_expired(value: datetime | None) -> bool:
+    expires_at = _local_datetime(value)
+    return expires_at is not None and expires_at <= datetime.now(LOCAL_TZ)
+
+
 @router.post("/api/qr/create", response_model=CreateResponse)
 def create_qr(req: CreateRequest, db: Session = Depends(get_db)):
     # Validate and normalize before we generate a token or persist anything.
@@ -41,7 +54,7 @@ def create_qr(req: CreateRequest, db: Session = Depends(get_db)):
     mapping = UrlMapping(
         token=token,
         original_url=normalized_url,
-        expires_at=req.expires_at,
+        expires_at=_local_datetime(req.expires_at),
     )
     db.add(mapping)
     db.commit()
@@ -49,7 +62,7 @@ def create_qr(req: CreateRequest, db: Session = Depends(get_db)):
     short_url = f"{BASE_URL}/r/{token}"
 
     # Warm cache with metadata so cache hits never need a DB round-trip.
-    redirect_cache[token] = {"url": normalized_url, "expires_at": req.expires_at}
+    redirect_cache[token] = {"url": normalized_url, "expires_at": _local_datetime(req.expires_at)}
 
     return CreateResponse(
         token=token,
@@ -70,24 +83,30 @@ def redirect(token: str, request: Request, db: Session = Depends(get_db)):
     if cached is not None:
         # Serve entirely from cached metadata — no DB round-trip needed.
         # Deletions are handled by cache invalidation in delete_qr/update_qr.
-        if cached["expires_at"] is not None and cached["expires_at"] <= datetime.utcnow():
+        if _is_expired(cached["expires_at"]):
             redirect_cache.pop(token, None)
             raise HTTPException(status_code=410, detail="Gone")
         _record_scan(token, request, db)
-        return RedirectResponse(url=cached["url"], status_code=302)
+        return RedirectResponse(
+            url=cached["url"],
+            status_code=302,
+            headers={"X-Cache": "HIT"},
+        )
 
     mapping = db.query(UrlMapping).filter(UrlMapping.token == token).first()
     if mapping is None:
         raise HTTPException(status_code=404, detail="Not Found")
-    if mapping.is_deleted or (
-        mapping.expires_at is not None and mapping.expires_at <= datetime.utcnow()
-    ):
+    if mapping.is_deleted or _is_expired(mapping.expires_at):
         raise HTTPException(status_code=410, detail="Gone")
 
     # Warm the cache after a DB hit so the next redirect avoids another lookup.
     redirect_cache[token] = {"url": mapping.original_url, "expires_at": mapping.expires_at}
     _record_scan(token, request, db)
-    return RedirectResponse(url=mapping.original_url, status_code=302)
+    return RedirectResponse(
+        url=mapping.original_url,
+        status_code=302,
+        headers={"X-Cache": "MISS"},
+    )
 
 
 @router.get("/api/qr/{token}", response_model=QRInfoResponse)
@@ -111,7 +130,7 @@ def update_qr(token: str, req: UpdateRequest, db: Session = Depends(get_db)):
         redirect_cache.pop(token, None)
 
     if req.expires_at is not None:
-        mapping.expires_at = req.expires_at
+        mapping.expires_at = _local_datetime(req.expires_at)
         # Invalidate cache
         redirect_cache.pop(token, None)
 
