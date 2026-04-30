@@ -1,5 +1,6 @@
 import io
 from datetime import datetime
+from typing import TypedDict
 
 import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,8 +16,14 @@ from .url_validator import validate_url
 
 router = APIRouter()
 
+
+class _CacheEntry(TypedDict):
+    url: str
+    expires_at: datetime | None
+
+
 # In-memory cache (simulates Redis for prototype)
-redirect_cache: dict[str, str] = {}
+redirect_cache: dict[str, _CacheEntry] = {}
 
 BASE_URL = "http://localhost:8000"
 
@@ -41,8 +48,8 @@ def create_qr(req: CreateRequest, db: Session = Depends(get_db)):
 
     short_url = f"{BASE_URL}/r/{token}"
 
-    # Warm cache
-    redirect_cache[token] = normalized_url
+    # Warm cache with metadata so cache hits never need a DB round-trip.
+    redirect_cache[token] = {"url": normalized_url, "expires_at": req.expires_at}
 
     return CreateResponse(
         token=token,
@@ -59,21 +66,15 @@ def redirect(token: str, request: Request, db: Session = Depends(get_db)):
     # 1. Check redirect_cache first because this is the hottest path in the system.
     # 2. Fall back to the DB on cache miss so deletes and expirations still work.
     # 3. Return 404 for unknown tokens, 410 for deleted/expired tokens, and 302 otherwise.
-    cached_url = redirect_cache.get(token)
-    if cached_url is not None:
-        # Even on a cache hit, re-check the DB so soft deletes and expirations are honored.
-        mapping = db.query(UrlMapping).filter(UrlMapping.token == token).first()
-        if mapping is None:
-            redirect_cache.pop(token, None)
-            raise HTTPException(status_code=404, detail="Not Found")
-        if mapping.is_deleted or (
-            mapping.expires_at is not None and mapping.expires_at <= datetime.utcnow()
-        ):
+    cached = redirect_cache.get(token)
+    if cached is not None:
+        # Serve entirely from cached metadata — no DB round-trip needed.
+        # Deletions are handled by cache invalidation in delete_qr/update_qr.
+        if cached["expires_at"] is not None and cached["expires_at"] <= datetime.utcnow():
             redirect_cache.pop(token, None)
             raise HTTPException(status_code=410, detail="Gone")
-
         _record_scan(token, request, db)
-        return RedirectResponse(url=cached_url, status_code=302)
+        return RedirectResponse(url=cached["url"], status_code=302)
 
     mapping = db.query(UrlMapping).filter(UrlMapping.token == token).first()
     if mapping is None:
@@ -81,11 +82,10 @@ def redirect(token: str, request: Request, db: Session = Depends(get_db)):
     if mapping.is_deleted or (
         mapping.expires_at is not None and mapping.expires_at <= datetime.utcnow()
     ):
-        redirect_cache.pop(token, None)
         raise HTTPException(status_code=410, detail="Gone")
 
     # Warm the cache after a DB hit so the next redirect avoids another lookup.
-    redirect_cache[token] = mapping.original_url
+    redirect_cache[token] = {"url": mapping.original_url, "expires_at": mapping.expires_at}
     _record_scan(token, request, db)
     return RedirectResponse(url=mapping.original_url, status_code=302)
 

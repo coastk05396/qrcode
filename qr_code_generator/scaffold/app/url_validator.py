@@ -1,3 +1,4 @@
+import ipaddress
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 MAX_URL_LENGTH = 2048
@@ -42,7 +43,12 @@ def validate_url(url: str) -> str:
     if port in {80, 443}:
         port = None
 
-    netloc = host if port is None else f"{host}:{port}"
+    try:
+        ipaddress.IPv6Address(host)
+        normalized_host = f"[{host}]"
+    except ValueError:
+        normalized_host = host
+    netloc = normalized_host if port is None else f"{normalized_host}:{port}"
     path = parsed.path.rstrip("/")
     query = urlencode(sorted(parse_qsl(parsed.query, keep_blank_values=True)), doseq=True)
 
