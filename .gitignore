@@ -14,3 +14,9 @@ venv/
 .vscode/
 .idea/
 .codex*
+
+# Frontend / Vite
+node_modules/
+dist/
+.env.local
+tsconfig.tsbuildinfo
