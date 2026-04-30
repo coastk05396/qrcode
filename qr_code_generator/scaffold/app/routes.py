@@ -1,5 +1,6 @@
 import io
-from datetime import datetime
+from collections import defaultdict, deque
+from datetime import datetime, timedelta
 from typing import TypedDict
 
 import qrcode
@@ -26,6 +27,9 @@ class _CacheEntry(TypedDict):
 redirect_cache: dict[str, _CacheEntry] = {}
 
 BASE_URL = "http://localhost:8000"
+CREATE_RATE_LIMIT_COUNT = 3
+CREATE_RATE_LIMIT_WINDOW = timedelta(minutes=1)
+create_rate_limit: defaultdict[str, deque[datetime]] = defaultdict(deque)
 
 
 def _local_datetime(value: datetime | None) -> datetime | None:
@@ -41,8 +45,29 @@ def _is_expired(value: datetime | None) -> bool:
     return expires_at is not None and expires_at <= datetime.now(LOCAL_TZ)
 
 
+def _check_create_rate_limit(request: Request):
+    now = datetime.now(LOCAL_TZ)
+    client_key = request.client.host if request.client else "unknown"
+    attempts = create_rate_limit[client_key]
+
+    while attempts and now - attempts[0] >= CREATE_RATE_LIMIT_WINDOW:
+        attempts.popleft()
+
+    if len(attempts) >= CREATE_RATE_LIMIT_COUNT:
+        retry_after = int((attempts[0] + CREATE_RATE_LIMIT_WINDOW - now).total_seconds()) + 1
+        raise HTTPException(
+            status_code=429,
+            detail="Too many QR codes created. Try again later.",
+            headers={"Retry-After": str(max(retry_after, 1))},
+        )
+
+    attempts.append(now)
+
+
 @router.post("/api/qr/create", response_model=CreateResponse)
-def create_qr(req: CreateRequest, db: Session = Depends(get_db)):
+def create_qr(req: CreateRequest, request: Request, db: Session = Depends(get_db)):
+    _check_create_rate_limit(request)
+
     # Validate and normalize before we generate a token or persist anything.
     try:                                                                                                                                                           
         normalized_url = validate_url(req.url)                
