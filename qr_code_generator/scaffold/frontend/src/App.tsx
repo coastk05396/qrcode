@@ -83,6 +83,18 @@ function App() {
     return () => window.clearTimeout(timeoutId);
   }, [toast]);
 
+  useEffect(() => {
+    if (!fieldError) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setFieldError("");
+    }, 3000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [fieldError]);
+
   async function createQr(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setToast(null);
@@ -233,7 +245,7 @@ function App() {
       </section>
 
       <section className="workspace" aria-label="QR generator">
-        <form className="generator-card" onSubmit={createQr}>
+        <form className="generator-card" onSubmit={createQr} noValidate>
           <div className="card-heading">
             <span>New QR</span>
             <strong>{result ? result.token : "ready"}</strong>
@@ -242,7 +254,7 @@ function App() {
           <label className="field">
             <span>Destination URL</span>
             <input
-              type="url"
+              type="text"
               inputMode="url"
               autoComplete="url"
               placeholder="https://example.com"
