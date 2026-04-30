@@ -6,6 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .database import Base
 
 
+# Stores the editable short-link metadata behind each QR code.
 class UrlMapping(Base):
     __tablename__ = "url_mappings"
 
@@ -16,17 +17,18 @@ class UrlMapping(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+# Stores every redirect hit so the API can return simple analytics later.
 class ScanEvent(Base):
     __tablename__ = "scan_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     token: Mapped[str] = mapped_column(String(8), nullable=False)
     scanned_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[str] = mapped_column(String(500), nullable=True)
+    ip_address: Mapped[str] = mapped_column(String(45), nullable=True)
 
     __table_args__ = (Index("idx_token_scanned", "token", "scanned_at"),)

@@ -15,15 +15,15 @@ Build a dynamic QR code system where:
 
 Answer these before you start coding:
 
-1. **Static vs Dynamic QR Code:** Why does this system use dynamic QR codes (encode short URL) instead of static (encode original URL directly)? When would you choose static instead?
+1. **Static vs Dynamic QR Code:** Why does this system use dynamic QR codes (encode short URL) instead of static (encode original URL directly)? When would you choose static instead? Dynamic QR codes allow us to change the target URL after creation, enabling features like updates and analytics. Static QR codes are simpler and more efficient if the URL will never change, but they lack flexibility. For a system that requires post-creation modifications and tracking, dynamic QR codes are essential.
 
-2. **Token Generation:** How will you generate short URL tokens? What happens when two different URLs produce the same token? How does collision probability change as the number of tokens grows?
+2. **Token Generation:** How will you generate short URL tokens? What happens when two different URLs produce the same token? How does collision probability change as the number of tokens grows? Hash url + nonce + timestamp with SHA-256, Base62-encode, truncate to 7 chars. On collision, re-roll the nonce and retry. With a 62^7 ≈ 3.5T token space, collisions are rare but the DB uniqueness check guarantees correctness.
 
-3. **Redirect Strategy:** Why 302 (temporary) instead of 301 (permanent)? What are the trade-offs for analytics, URL modification, and latency?
+3. **Redirect Strategy:** Why 302 (temporary) instead of 301 (permanent)? What are the trade-offs for analytics, URL modification, and latency? 302 forces every scan to hit our server, enabling analytics and allowing URL updates. 301 is cached by browsers permanently — once cached, we lose control of the destination. 302 may add latency due to the extra redirect, but it’s necessary for our features.
 
-4. **URL Normalization:** What normalization rules do you need? Why is `http://Example.com/` and `https://example.com` potentially the same URL?
+4. **URL Normalization:** What normalization rules do you need? Why is `http://Example.com/` and `https://example.com` potentially the same URL? Normalization rules: lowercase scheme and host, remove default ports, add trailing slash to root paths, sort query parameters. `http://Example.com/` and `https://example.com` should be the same if the server treats them as equivalent (e.g., redirects HTTP to HTTPS). Normalization helps prevent duplicate entries for the same logical URL.
 
-5. **Error Semantics:** What should happen when someone scans a deleted link vs a non-existent link? Should the HTTP status codes be different?
+5. **Error Semantics:** What should happen when someone scans a deleted link vs a non-existent link? Should the HTTP status codes be different? Deleted links should return 410 Gone to indicate they existed but are now removed. Non-existent tokens should return 404 Not Found, indicating they were never created. This distinction helps users understand the reason for failure.
 
 ## Verification
 
