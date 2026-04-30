@@ -9,7 +9,7 @@ import {
   RefreshCcw,
   Sparkles
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type CreateResponse = {
   token: string;
@@ -70,6 +70,18 @@ function App() {
     }
     return result ? formatHostname(result.original_url) : "your link";
   }, [result, url]);
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setToast(null);
+    }, 5000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [toast]);
 
   async function createQr(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

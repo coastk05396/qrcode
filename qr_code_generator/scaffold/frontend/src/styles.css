@@ -345,12 +345,13 @@ h1 {
 .toast {
   position: fixed;
   right: 18px;
-  bottom: 18px;
+  bottom: 28px;
   max-width: min(420px, calc(100vw - 36px));
   border-radius: 16px;
   padding: 13px 16px;
   box-shadow: 0 18px 44px rgb(24 33 47 / 20%);
   font-weight: 800;
+  animation: toast-drop 5s ease forwards;
 }
 
 .toast.success {
@@ -361,6 +362,19 @@ h1 {
 .toast.error {
   background: #fff0ed;
   color: var(--danger);
+}
+
+@keyframes toast-drop {
+  0%,
+  84% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(18px);
+  }
 }
 
 @media (min-width: 760px) {
@@ -389,4 +403,3 @@ h1 {
     transform: rotate(360deg);
   }
 }
-
