@@ -1,5 +1,12 @@
 # QR Code Generator — Exercise
 
+## GIF
+
+<img width="1920" height="1080" alt="output" src="https://github.com/user-attachments/assets/0391bd06-9864-4e7c-a5ff-e8d3557f9f5f" />
+
+## Image
+<img width="480" height="500" alt="Snipaste_2026-05-01_00-50-06" src="https://github.com/user-attachments/assets/d4665fd4-3842-40ac-99e2-14ca86de69fe" />
+
 ## How to Use
 
 1. Read `PROMPT.md`
