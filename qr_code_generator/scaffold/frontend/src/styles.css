@@ -346,6 +346,7 @@ h1 {
   position: fixed;
   right: 18px;
   bottom: 28px;
+  z-index: 10;
   max-width: min(420px, calc(100vw - 36px));
   border-radius: 16px;
   padding: 13px 16px;
@@ -374,6 +375,15 @@ h1 {
   100% {
     opacity: 0;
     transform: translateY(18px);
+  }
+}
+
+@media (max-width: 759px) {
+  .toast {
+    position: static;
+    max-width: none;
+    margin-top: 16px;
+    text-align: center;
   }
 }
 
