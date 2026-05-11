@@ -2,11 +2,16 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 jobs:
   backend-tests:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
       - name: Check out repository
@@ -15,7 +20,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install backend dependencies
         working-directory: qr_code_generator/scaffold
@@ -23,4 +28,4 @@ jobs:
 
       - name: Run backend unit tests
         working-directory: qr_code_generator/scaffold
-        run: pytest
+        run: python -m pytest
